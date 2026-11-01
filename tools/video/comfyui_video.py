@@ -160,6 +160,13 @@ class ComfyUIVideo(BaseTool):
                 "type": "string",
                 "description": "Text prompt for video generation",
             },
+            "negative_prompt": {
+                "type": "string",
+                "description": (
+                    "Optional negative prompt. Replaces the bundled WAN quality "
+                    "negative text when provided."
+                ),
+            },
             "operation": {
                 "type": "string",
                 "enum": ["text_to_video", "image_to_video"],
@@ -608,27 +615,27 @@ class ComfyUIVideo(BaseTool):
         num_frames = inputs.get("num_frames", 81)
 
         workflow = ComfyUIClient.load_workflow(_WORKFLOWS / "wan22-t2v-4step.json")
-        workflow = ComfyUIClient.patch_workflow(
-            workflow,
-            {
-                "2": {"text": inputs["prompt"]},
-                # `length` is the frame count, `batch_size` is how many separate
-                # clips to make. Node 11 used to be an EmptyLatentImage with
-                # batch_size=num_frames, which asks for 81 unrelated images
-                # rather than one 81-frame video: the mp4 has the right frame
-                # count and duration and passes ffprobe, but strobes. WAN 2.2
-                # needs a temporal video latent, as ComfyUI's own
-                # video_wan2_2_14B_t2v template uses.
-                "11": {
-                    "width": width,
-                    "height": height,
-                    "length": num_frames,
-                    "batch_size": 1,
-                },
-                "12": {"noise_seed": seed},
-                "16": {"filename_prefix": output_path.stem},
+        patches: dict[str, dict[str, Any]] = {
+            "2": {"text": inputs["prompt"]},
+            # `length` is the frame count, `batch_size` is how many separate
+            # clips to make. Node 11 used to be an EmptyLatentImage with
+            # batch_size=num_frames, which asks for 81 unrelated images
+            # rather than one 81-frame video: the mp4 has the right frame
+            # count and duration and passes ffprobe, but strobes. WAN 2.2
+            # needs a temporal video latent, as ComfyUI's own
+            # video_wan2_2_14B_t2v template uses.
+            "11": {
+                "width": width,
+                "height": height,
+                "length": num_frames,
+                "batch_size": 1,
             },
-        )
+            "12": {"noise_seed": seed},
+            "16": {"filename_prefix": output_path.stem},
+        }
+        if inputs.get("negative_prompt"):
+            patches["3"] = {"text": inputs["negative_prompt"]}
+        workflow = ComfyUIClient.patch_workflow(workflow, patches)
         return workflow, _T2V_OUTPUT_NODE
 
     def _build_i2v(
@@ -660,16 +667,16 @@ class ComfyUIVideo(BaseTool):
         server_name = self._client.upload_image(Path(ref_path), upload_name)
 
         workflow = ComfyUIClient.load_workflow(_WORKFLOWS / "wan22-i2v-4step.json")
-        workflow = ComfyUIClient.patch_workflow(
-            workflow,
-            {
-                "93": {"text": inputs["prompt"]},
-                "97": {"image": server_name},
-                "98": {"width": width, "height": height, "length": num_frames},
-                "86": {"noise_seed": seed},
-                "108": {"filename_prefix": output_path.stem},
-            },
-        )
+        patches: dict[str, dict[str, Any]] = {
+            "93": {"text": inputs["prompt"]},
+            "97": {"image": server_name},
+            "98": {"width": width, "height": height, "length": num_frames},
+            "86": {"noise_seed": seed},
+            "108": {"filename_prefix": output_path.stem},
+        }
+        if inputs.get("negative_prompt"):
+            patches["89"] = {"text": inputs["negative_prompt"]}
+        workflow = ComfyUIClient.patch_workflow(workflow, patches)
         return workflow, _I2V_OUTPUT_NODE
 
     @staticmethod
