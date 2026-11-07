@@ -83,6 +83,13 @@ class DoubaoTTS(BaseTool):
                 "default": "seed-tts-2.0",
                 "description": "Volcengine resource id. Use seed-tts-2.0 for Doubao Speech 2.0 voices.",
             },
+            "context_texts": {
+                "type": "string",
+                "description": (
+                    "Doubao 2.0 语音指令：用自然语言描述音色、情绪、语速、方言。"
+                    "仅 seed-tts-2.0 官方 2.0 音色支持，指令文字本身不计费。"
+                ),
+            },
             "format": {
                 "type": "string",
                 "default": "mp3",
@@ -274,6 +281,7 @@ class DoubaoTTS(BaseTool):
                 "format": fmt,
                 "sample_rate": inputs.get("sample_rate", 24000),
                 "speech_rate": inputs.get("speech_rate", 0),
+                "context_texts": inputs.get("context_texts"),
                 "text_length": len(text),
                 "task_id": task_id,
                 "task_status": data.get("task_status"),
@@ -319,15 +327,23 @@ class DoubaoTTS(BaseTool):
         additions = {
             "disable_markdown_filter": bool(inputs.get("disable_markdown_filter", False)),
         }
+        req_params: dict[str, Any] = {
+            "text": inputs["text"],
+            "speaker": voice_id,
+            "audio_params": audio_params,
+            "additions": json.dumps(additions, ensure_ascii=False),
+        }
+        context_texts = inputs.get("context_texts")
+        if context_texts:
+            # The long-form submit endpoint wants a plain string; the streaming
+            # endpoints document an array. Sending an array here fails with a 500.
+            if isinstance(context_texts, (list, tuple)):
+                context_texts = "\n".join(str(item) for item in context_texts)
+            req_params["context_texts"] = str(context_texts)
         return {
             "user": {"uid": inputs.get("user_id", "openmontage")},
             "unique_id": request_id,
-            "req_params": {
-                "text": inputs["text"],
-                "speaker": voice_id,
-                "audio_params": audio_params,
-                "additions": json.dumps(additions, ensure_ascii=False),
-            },
+            "req_params": req_params,
         }
 
     def _poll_query(
