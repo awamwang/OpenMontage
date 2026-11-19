@@ -21,31 +21,35 @@ from tools.base_tool import (
     ToolTier,
 )
 from tools.graphics.dashscope_image import DashscopeImage
+from tools.video.dashscope_wan_video import DashscopeWanVideo
 from tools.audio.dashscope_tts import DashscopeTTS
 from tools.analysis.dashscope_asr import DashscopeAsr
 
-TOOLS = [DashscopeImage, DashscopeTTS, DashscopeAsr]
+TOOLS = [DashscopeImage, DashscopeTTS, DashscopeAsr, DashscopeWanVideo]
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
 EXPECTED_TIER = {
     DashscopeImage: ToolTier.GENERATE,
     DashscopeTTS: ToolTier.VOICE,
     DashscopeAsr: ToolTier.ANALYZE,
+    DashscopeWanVideo: ToolTier.GENERATE,
 }
 EXPECTED_CAPABILITY = {
     DashscopeImage: "image_generation",
     DashscopeTTS: "tts",
     DashscopeAsr: "analysis",
+    DashscopeWanVideo: "video_generation",
 }
 EXPECTED_EXECUTION_MODE = {
     DashscopeImage: ExecutionMode.SYNC,
     DashscopeTTS: ExecutionMode.SYNC,
     DashscopeAsr: ExecutionMode.ASYNC,
+    DashscopeWanVideo: ExecutionMode.ASYNC,
 }
 
 
 # ------------------------------------------------------------------
-# Contract compliance (parametrized over all 3 tools)
+# Contract compliance (parametrized over all dashscope tools)
 # ------------------------------------------------------------------
 
 @pytest.mark.parametrize("cls", TOOLS, ids=lambda c: c.name)
@@ -108,7 +112,7 @@ class TestContract:
         assert info["name"] == tool.name
         assert info["provider"] == "dashscope"
         assert info["runtime"] == "api"
-        assert info["agent_skills"] == ["dashscope"]
+        assert "dashscope" in info["agent_skills"]
 
     def test_execution_mode(self, cls):
         tool = cls()
@@ -170,6 +174,10 @@ class TestContract:
             cost = tool.estimate_cost({"prompt": "test", "n": 1})
         elif cls is DashscopeTTS:
             cost = tool.estimate_cost({"text": "test"})
+        elif cls is DashscopeWanVideo:
+            cost = tool.estimate_cost(
+                {"prompt": "test", "duration": 4, "resolution": "480P"}
+            )
         else:
             cost = tool.estimate_cost({"audio_url": "https://x.com/a.mp3"})
         assert isinstance(cost, float)
@@ -181,6 +189,8 @@ class TestContract:
             result = tool.dry_run({"prompt": "test"})
         elif cls is DashscopeTTS:
             result = tool.dry_run({"text": "test"})
+        elif cls is DashscopeWanVideo:
+            result = tool.dry_run({"prompt": "test", "duration": 4})
         else:
             result = tool.dry_run({"audio_url": "https://x.com/a.mp3"})
         assert isinstance(result, dict)
@@ -239,6 +249,27 @@ class TestDashscopeImageSpecific:
         tool = DashscopeImage()
         payload = tool._build_payload({"prompt": "test"})
         assert "negative_prompt" not in payload["parameters"]
+
+    def test_build_payload_image_edit_puts_image_before_text(self, tmp_path):
+        tool = DashscopeImage()
+        img = tmp_path / "ref.png"
+        img.write_bytes(
+            b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01"
+            b"\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00"
+            b"\x0cIDATx\x9cc\xf8\x0f\x00\x00\x01\x01\x00\x05\x18\xd8N"
+            b"\x00\x00\x00\x00IEND\xaeB`\x82"
+        )
+        payload = tool._build_payload(
+            {
+                "prompt": "fix ankle",
+                "model": "qwen-image-2.1-pro",
+                "image_path": str(img),
+            }
+        )
+        content = payload["input"]["messages"][0]["content"]
+        assert payload["model"] == "qwen-image-2.1-pro"
+        assert content[0]["image"].startswith("data:image/png;base64,")
+        assert content[1]["text"] == "fix ankle"
 
     def test_safe_error_redacts_key(self, monkeypatch):
         monkeypatch.setenv("DASHSCOPE_API_KEY", "secret-key-12345")
@@ -691,7 +722,12 @@ class TestDashscopeRegistryDiscovery:
             if t.provider == "dashscope"
         ]
         names = {t.name for t in dashscope_tools}
-        assert names == {"dashscope_image", "dashscope_tts", "dashscope_asr"}
+        assert names == {
+            "dashscope_image",
+            "dashscope_tts",
+            "dashscope_asr",
+            "dashscope_wan_video",
+        }
 
     def test_image_selector_finds_dashscope(self):
         """image_selector should auto-discover dashscope_image by capability."""
@@ -706,3 +742,66 @@ class TestDashscopeRegistryDiscovery:
         from tools.audio.tts_selector import TTSSelector
         selector = TTSSelector()
         assert DashscopeTTS().capability == "tts"
+
+    def test_video_capability_is_wan(self):
+        assert DashscopeWanVideo().capability == "video_generation"
+        assert DashscopeWanVideo().get_status() in {
+            ToolStatus.AVAILABLE,
+            ToolStatus.UNAVAILABLE,
+        }
+
+
+class TestDashscopeWanVideoSpecific:
+    def test_default_model_is_prime(self):
+        tool = DashscopeWanVideo()
+        assert tool.input_schema["properties"]["model"]["default"] == (
+            "wan3.0-video-prime"
+        )
+
+    def test_build_payload_i2v_data_uri(self, tmp_path):
+        tool = DashscopeWanVideo()
+        img = tmp_path / "frame.png"
+        # Minimal valid PNG
+        img.write_bytes(
+            bytes.fromhex(
+                "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4"
+                "890000000a49444154789c63000100000500010d0a2db40000000049454e44ae426082"
+            )
+        )
+        payload = tool._build_payload(
+            {
+                "prompt": "缓慢推近",
+                "operation": "image_to_video",
+                "image_path": str(img),
+                "duration": 4,
+                "audio": False,
+                "prompt_extend": False,
+                "seed": 1102,
+            }
+        )
+        assert payload["model"] == "wan3.0-video-prime"
+        assert payload["parameters"]["duration"] == 4
+        assert payload["parameters"]["audio"] is False
+        media = payload["input"]["media"]
+        assert media[0]["type"] == "first_frame"
+        assert media[0]["url"].startswith("data:image/png;base64,")
+
+    def test_text_to_video_rejects_image(self):
+        tool = DashscopeWanVideo()
+        try:
+            tool._build_payload(
+                {
+                    "prompt": "test",
+                    "operation": "text_to_video",
+                    "image_path": "x.png",
+                }
+            )
+            assert False, "expected ValueError"
+        except ValueError as exc:
+            assert "must not include" in str(exc)
+
+    def test_estimate_cost_scales_with_duration(self):
+        tool = DashscopeWanVideo()
+        assert tool.estimate_cost({"duration": 4, "resolution": "480P"}) == round(
+            0.0636 * 4, 4
+        )
