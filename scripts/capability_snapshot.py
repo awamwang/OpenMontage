@@ -12,12 +12,13 @@ Usage:
     python scripts/capability_snapshot.py --show     # print saved markdown (no probe)
     python scripts/capability_snapshot.py --check    # freshness report (no probe)
 
-Refresh after editing .env, installing a local server, or when --check
-reports stale. Production preflight still uses the live registry.
+Refresh after editing .env, pulling code, installing a local server, or when
+--check reports stale. Production preflight still uses the live registry.
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -57,6 +58,17 @@ _ENV_TOKEN_RE = re.compile(
 
 def _now() -> datetime:
     return datetime.now().astimezone()
+
+
+def _tools_fingerprint() -> str:
+    """Content hash of tools/ so a pulled tool change invalidates the snapshot."""
+    digest = hashlib.sha256()
+    for path in sorted((REPO_ROOT / "tools").rglob("*.py")):
+        if "__pycache__" in path.parts:
+            continue
+        digest.update(path.relative_to(REPO_ROOT).as_posix().encode("utf-8"))
+        digest.update(path.read_bytes())
+    return digest.hexdigest()[:16]
 
 
 def _reconfigure_streams() -> None:
@@ -160,6 +172,7 @@ def build_snapshot() -> dict[str, Any]:
         "schema_version": 1,
         "generated_at": _now().isoformat(timespec="seconds"),
         "fresh_for_days": FRESH_DAYS,
+        "tools_fingerprint": _tools_fingerprint(),
         "composition_runtimes": runtimes,
         "runtime_warnings": warnings,
         "capabilities": dict(sorted(caps.items())),
@@ -234,9 +247,9 @@ def _render_md(snapshot: dict[str, Any]) -> str:
         f"{until.strftime('%Y-%m-%d')} · regenerate with "
         "`python scripts/capability_snapshot.py`",
         "",
-        "> Cached rollup of the live tool registry. Re-run after editing `.env`",
-        "> or starting/stopping a local server. Production preflight still uses",
-        "> `provider_menu_summary()`.",
+        "> Cached rollup of the live tool registry. Re-run after editing `.env`,",
+        "> pulling code, or starting/stopping a local server. Production preflight",
+        "> still uses `provider_menu_summary()`.",
         "",
         "## Composition runtimes",
         "",
@@ -307,6 +320,12 @@ def check_snapshot(out_dir: Path) -> int:
     reasons: list[str] = []
     if age > limit:
         reasons.append(f"older than {limit.days} days (age {age.days}d)")
+
+    recorded_fingerprint = snapshot.get("tools_fingerprint")
+    if not recorded_fingerprint:
+        reasons.append("no tools fingerprint (pre-upgrade snapshot)")
+    elif _tools_fingerprint() != recorded_fingerprint:
+        reasons.append("tools/ changed since snapshot")
 
     changed: list[str] = []
     for key, expected in (snapshot.get("env_fingerprint") or {}).items():

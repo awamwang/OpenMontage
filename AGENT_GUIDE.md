@@ -286,9 +286,10 @@ runs it once and writes a cached rollup:
 - `workspace/capabilities/capability_snapshot.json` — same data + fingerprint for
   staleness checks.
 
-`--check` reports freshness without probing (stale after 7 days or any env-var
-change); `--show` prints the markdown without probing. Refresh after editing
-`.env` or starting/stopping a local server. The snapshot is a convenience cache —
+`--check` reports freshness without probing (stale after 7 days, any env-var
+change, or any `tools/` code change — a pull invalidates it); `--show` prints
+the markdown without probing. Refresh after editing `.env`, pulling code, or
+starting/stopping a local server. The snapshot is a convenience cache —
 production preflight still goes through `provider_menu_summary()` below.
 
 The summary returns four fields the agent should translate into plain language:
