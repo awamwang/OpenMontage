@@ -28,6 +28,12 @@ print(json.dumps(menu, indent=2))
 "
 ```
 
+**Fast path:** run `python scripts/capability_snapshot.py --check`. If it says
+`fresh`, read `workspace/capabilities/capability_snapshot.md` instead of re-running
+discovery — it holds the same rollup plus per-key unlocks and a local-install list.
+If stale or missing, run the discovery above and refresh with
+`python scripts/capability_snapshot.py`.
+
 Parse the output into three buckets:
 
 1. **Available** — tools with `status: AVAILABLE`

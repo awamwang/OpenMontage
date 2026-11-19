@@ -273,6 +273,22 @@ print(json.dumps(registry.provider_menu_summary(), indent=2))
 "
 ```
 
+### Fast capability snapshot (for "what can I generate with?" questions)
+
+A full sweep costs ~20s and prints a firehose. `python scripts/capability_snapshot.py`
+runs it once and writes a cached rollup:
+
+- `workspace/capabilities/capability_snapshot.md` — plain-language menu, generation
+  capabilities first (available tools, per-key unlocks, local installs), plus an
+  env-var fingerprint. Read this file to answer capability questions.
+- `workspace/capabilities/capability_snapshot.json` — same data + fingerprint for
+  staleness checks.
+
+`--check` reports freshness without probing (stale after 7 days or any env-var
+change); `--show` prints the markdown without probing. Refresh after editing
+`.env` or starting/stopping a local server. The snapshot is a convenience cache —
+production preflight still goes through `provider_menu_summary()` below.
+
 The summary returns four fields the agent should translate into plain language:
 
 - `composition_runtimes` — booleans for `ffmpeg`, `remotion`, `hyperframes`. This is the source of truth for the "Present Both Composition Runtimes (HARD RULE)" check.
@@ -698,6 +714,7 @@ The `.agents/skills/` directory is large. When you're not coming in through a to
 | Question | Where to look |
 |----------|---------------|
 | What tools exist? | `tools/tool_registry.py` and `registry.support_envelope()` |
+| What generation paths are configured right now (fast)? | `workspace/capabilities/capability_snapshot.md` — refresh with `python scripts/capability_snapshot.py` |
 | What providers are available for a capability? | `registry.capability_catalog()` |
 | What tools exist for a vendor? | `registry.provider_catalog()` |
 | How does a tool actually work? | the tool's `usage_location` from the registry |
