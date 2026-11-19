@@ -46,20 +46,22 @@ class DashscopeImage(BaseTool):
     fallback_tools = ["grok_image", "openai_image", "flux_image", "recraft_image"]
     agent_skills = ["dashscope"]
 
-    capabilities = ["generate_image", "text_to_image"]
+    capabilities = ["generate_image", "text_to_image", "image_to_image", "image_edit"]
     supports = {
         "multiple_outputs": True,
         "aspect_ratio": True,
         "resolution": True,
         "negative_prompt": True,
         "seed": True,
+        "reference_images": True,
     }
     best_for = [
         "high-quality image generation with Qwen-Image models",
         "Chinese-language prompt understanding",
         "cost-effective image generation via Alibaba Cloud",
+        "instruction image editing with qwen-image-2.1-pro",
     ]
-    not_good_for = ["offline generation", "image editing (use grok_image edit mode)"]
+    not_good_for = ["offline generation"]
 
     input_schema = {
         "type": "object",
@@ -69,6 +71,8 @@ class DashscopeImage(BaseTool):
             "model": {
                 "type": "string",
                 "enum": [
+                    "qwen-image-2.1-pro",
+                    "qwen-image-2.1-turbo",
                     "qwen-image-2.0-pro",
                     "qwen-image-max",
                     "wan2.7-image",
@@ -96,6 +100,24 @@ class DashscopeImage(BaseTool):
             },
             "watermark": {"type": "boolean", "default": False},
             "seed": {"type": "integer", "minimum": 0, "maximum": 2147483647},
+            "image_path": {
+                "type": "string",
+                "description": "Local reference image for instruction editing / I2I (qwen-image-2.1 series).",
+            },
+            "image_paths": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Up to 10 local reference images for qwen-image-2.1 editing.",
+            },
+            "image_url": {
+                "type": "string",
+                "description": "Public or data-URI reference image for editing.",
+            },
+            "image_urls": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Up to 10 public/data-URI reference images for editing.",
+            },
             "output_path": {"type": "string"},
         },
     }
@@ -115,6 +137,10 @@ class DashscopeImage(BaseTool):
         "seed",
         "prompt_extend",
         "watermark",
+        "image_path",
+        "image_paths",
+        "image_url",
+        "image_urls",
     ]
     side_effects = [
         "writes image file to output_path",
@@ -253,18 +279,62 @@ class DashscopeImage(BaseTool):
         if inputs.get("seed") is not None:
             parameters["seed"] = int(inputs["seed"])
 
+        content: list[dict[str, str]] = []
+        for image_ref in self._collect_image_refs(inputs):
+            content.append({"image": image_ref})
+        content.append({"text": inputs["prompt"]})
+
         return {
             "model": inputs.get("model", "qwen-image-2.0-pro"),
             "input": {
                 "messages": [
                     {
                         "role": "user",
-                        "content": [{"text": inputs["prompt"]}],
+                        "content": content,
                     }
                 ]
             },
             "parameters": parameters,
         }
+
+    def _collect_image_refs(self, inputs: dict[str, Any]) -> list[str]:
+        """收集参考图：本地路径转 data URI，URL/data URI 原样保留。"""
+        refs: list[str] = []
+        for key in ("image_url", "image_path"):
+            value = inputs.get(key)
+            if value:
+                refs.append(self._normalize_image_ref(str(value)))
+        for key in ("image_urls", "image_paths"):
+            values = inputs.get(key) or []
+            if not isinstance(values, list):
+                raise ValueError(f"{key} must be a list of strings")
+            for value in values:
+                refs.append(self._normalize_image_ref(str(value)))
+        if len(refs) > 10:
+            raise ValueError("DashScope qwen-image editing supports at most 10 reference images")
+        return refs
+
+    @staticmethod
+    def _normalize_image_ref(value: str) -> str:
+        if value.startswith(("http://", "https://", "data:image/")):
+            return value
+        path = Path(value)
+        if not path.is_file():
+            raise ValueError(f"Reference image not found: {value}")
+        import base64
+        import mimetypes
+
+        mime, _ = mimetypes.guess_type(path.name)
+        if mime not in {"image/png", "image/jpeg", "image/webp"}:
+            suffix = path.suffix.lower()
+            mime = {
+                ".png": "image/png",
+                ".jpg": "image/jpeg",
+                ".jpeg": "image/jpeg",
+                ".webp": "image/webp",
+            }.get(suffix, "image/png")
+        encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+        return f"data:{mime};base64,{encoded}"
 
     @staticmethod
     def _safe_error(exc: Exception) -> str:

@@ -97,8 +97,15 @@ class ComfyUIClient:
 
     def is_available(self) -> bool:
         """Return True if the ComfyUI server is reachable."""
+        # A tunnel-fronted server can take 6s+ on /system_stats while ComfyUI's
+        # event loop is busy; the old 5s cap reported a healthy server as
+        # unavailable. Override with COMFYUI_HEALTH_TIMEOUT if needed.
         try:
-            resp = requests.get(f"{self.server_url}/system_stats", timeout=5)
+            timeout = float(os.environ.get("COMFYUI_HEALTH_TIMEOUT") or 15)
+        except ValueError:
+            timeout = 15.0
+        try:
+            resp = requests.get(f"{self.server_url}/system_stats", timeout=timeout)
             return resp.status_code == 200
         except Exception:
             return False
